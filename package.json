@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "check": "node --check src/server.js && node --check src/routes/auth.js && node --check src/tools/create-invite.js",
+    "check": "node --check src/server.js && node --check src/routes/auth.js && node --check src/routes/social.js && node --check src/auth-middleware.js && node --check src/tools/check-database.js && node --check src/tools/create-invite.js",
     "db:check": "node src/tools/check-database.js",
     "db:migrate": "node src/tools/apply-migration.js",
     "test": "node --test",

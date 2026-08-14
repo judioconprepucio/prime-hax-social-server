@@ -6,7 +6,7 @@ import {
   timingSafeEqual,
   verify as verifySignature
 } from 'node:crypto';
-import { SignJWT } from 'jose';
+import { jwtVerify, SignJWT } from 'jose';
 import { securityConfig } from './config.js';
 
 export function normalizeHandle(value) {
@@ -67,4 +67,18 @@ export async function createAccessToken(userId, deviceId) {
     .setIssuedAt()
     .setExpirationTime(`${config.accessTokenMinutes}m`)
     .sign(key);
+}
+
+export async function verifyAccessToken(token) {
+  const config = securityConfig();
+  const key = new TextEncoder().encode(config.jwtSecret);
+  const { payload } = await jwtVerify(token, key, {
+    issuer: 'prime-hax-social',
+    audience: 'prime-hax-client',
+    algorithms: ['HS256']
+  });
+  if (!payload.sub || typeof payload.device_id !== 'string') {
+    throw new Error('invalid_access_token');
+  }
+  return { userId: payload.sub, deviceId: payload.device_id };
 }

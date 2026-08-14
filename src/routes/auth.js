@@ -299,10 +299,23 @@ export async function authRoutes(app) {
   }, async (request, reply) => {
     const config = securityConfig();
     const tokenHash = hashWithPepper(request.body.refreshToken, config.refreshPepper);
-    await getPool().query(
-      `UPDATE refresh_sessions SET revoked_at = COALESCE(revoked_at, now()) WHERE token_hash = $1`,
-      [tokenHash]
-    );
+    await withTransaction(async (client) => {
+      const revoked = await client.query(
+        `UPDATE refresh_sessions SET revoked_at = COALESCE(revoked_at, now())
+         WHERE token_hash = $1 RETURNING user_id`,
+        [tokenHash]
+      );
+      if (revoked.rowCount) {
+        await client.query(
+          `UPDATE users SET presence = 'offline', last_seen_at = now()
+           WHERE id = $1 AND NOT EXISTS (
+             SELECT 1 FROM refresh_sessions
+             WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > now()
+           )`,
+          [revoked.rows[0].user_id]
+        );
+      }
+    });
     return reply.code(204).send();
   });
 }
