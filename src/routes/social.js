@@ -231,6 +231,58 @@ export async function socialRoutes(app) {
     };
   });
 
+  app.get('/users/:userId', { schema: { params: userIdParams } }, async (request, reply) => {
+    const result = await getPool().query(
+      `SELECT u.id, u.handle, u.handle_display, u.display_name, u.avatar_url, u.banner_url, u.bio,
+              u.presence, u.last_seen_at, u.role,
+              (SELECT updated_at FROM profile_media WHERE user_id = u.id AND kind = 'avatar') AS avatar_media_updated_at,
+              (SELECT updated_at FROM profile_media WHERE user_id = u.id AND kind = 'banner') AS banner_media_updated_at,
+              (SELECT count(*) FROM followers WHERE followed_id = u.id) AS follower_count,
+              (SELECT count(*) FROM followers WHERE follower_id = u.id) AS following_count,
+              (SELECT count(*) FROM friendships f
+                WHERE f.status = 'accepted' AND (f.user_low_id = u.id OR f.user_high_id = u.id)) AS friend_count
+       FROM users u WHERE u.id = $1 AND u.is_disabled = false`,
+      [request.params.userId]
+    );
+    if (!result.rowCount) return reply.code(404).send({ error: 'user_not_found' });
+    const row = result.rows[0];
+    return {
+      user: publicUser(row),
+      stats: {
+        friends: Number(row.friend_count),
+        followers: Number(row.follower_count),
+        following: Number(row.following_count)
+      }
+    };
+  });
+
+  app.patch('/users/:userId/role', {
+    schema: {
+      params: userIdParams,
+      body: {
+        type: 'object', additionalProperties: false, required: ['role'],
+        properties: { role: { type: 'string', enum: ['member', 'helper', 'developer', 'admin'] } }
+      }
+    }
+  }, async (request, reply) => {
+    if (request.params.userId === request.auth.userId) {
+      return reply.code(400).send({ error: 'cannot_change_own_role' });
+    }
+    const actor = await getPool().query('SELECT role FROM users WHERE id = $1 AND is_disabled = false', [request.auth.userId]);
+    const actorRole = actor.rows[0]?.role;
+    if (!['admin', 'developer'].includes(actorRole)) return reply.code(403).send({ error: 'admin_required' });
+    if (actorRole === 'developer' && request.body.role === 'admin') {
+      return reply.code(403).send({ error: 'admin_required' });
+    }
+    const updated = await getPool().query(
+      `UPDATE users SET role = $2, updated_at = now()
+       WHERE id = $1 AND is_disabled = false RETURNING role`,
+      [request.params.userId, request.body.role]
+    );
+    if (!updated.rowCount) return reply.code(404).send({ error: 'user_not_found' });
+    return { role: updated.rows[0].role };
+  });
+
   app.get('/friends', async (request) => {
     const result = await getPool().query(
       `SELECT f.status, f.requested_by, f.created_at, f.responded_at,
