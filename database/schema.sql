@@ -12,6 +12,7 @@ CREATE TABLE users (
   password_hash text,
   display_name varchar(40) NOT NULL,
   avatar_url text,
+  banner_url text,
   bio varchar(280) NOT NULL DEFAULT '',
   presence varchar(16) NOT NULL DEFAULT 'offline'
     CHECK (presence IN ('offline', 'online', 'away', 'busy', 'playing')),
@@ -146,6 +147,26 @@ CREATE TABLE friendships (
 
 CREATE INDEX friendships_high_user_idx ON friendships (user_high_id, status);
 CREATE INDEX friendships_requester_idx ON friendships (requested_by, status);
+
+CREATE TABLE followers (
+  follower_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  followed_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (follower_id, followed_id),
+  CHECK (follower_id <> followed_id)
+);
+
+CREATE INDEX followers_followed_idx ON followers (followed_id, created_at DESC);
+
+CREATE TABLE profile_media (
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind varchar(10) NOT NULL CHECK (kind IN ('avatar', 'banner')),
+  mime_type varchar(20) NOT NULL CHECK (mime_type IN ('image/png', 'image/jpeg', 'image/webp', 'image/gif')),
+  content bytea NOT NULL,
+  byte_size integer NOT NULL CHECK (byte_size > 0 AND byte_size <= 5242880),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, kind)
+);
 
 CREATE TABLE user_blocks (
   blocker_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -290,6 +311,8 @@ ALTER TABLE device_challenges ENABLE ROW LEVEL SECURITY;
 ALTER TABLE recovery_codes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE security_audit_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE friendships ENABLE ROW LEVEL SECURITY;
+ALTER TABLE followers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE profile_media ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_blocks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE conversations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE conversation_members ENABLE ROW LEVEL SECURITY;

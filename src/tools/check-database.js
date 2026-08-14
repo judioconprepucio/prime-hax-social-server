@@ -5,6 +5,8 @@ const expectedTables = [
   'invitation_codes',
   'trusted_devices',
   'friendships',
+  'followers',
+  'profile_media',
   'user_blocks',
   'conversations',
   'conversation_members',
@@ -23,6 +25,8 @@ const query = `
           'invitation_codes',
           'trusted_devices',
           'friendships',
+          'followers',
+          'profile_media',
           'user_blocks',
           'conversations',
           'conversation_members',
@@ -53,11 +57,11 @@ try {
   const status = result.rows[0];
   const missingTables = [...expectedTables, 'refresh_sessions']
     .filter((table) => !status.available_tables.includes(table));
-  if (status.core_tables !== 10 || missingTables.length || !status.device_migration) {
+  if (status.core_tables !== 12 || missingTables.length || !status.device_migration) {
     throw new Error(`La base no contiene toda la estructura esperada. Faltan: ${missingTables.join(', ') || 'columnas de migracion'}`);
   }
   process.stdout.write(`DATABASE_OK (${status.database_name})\n`);
-  process.stdout.write(`CORE_TABLES_OK (${status.core_tables}/10)\n`);
+  process.stdout.write(`CORE_TABLES_OK (${status.core_tables}/12)\n`);
   process.stdout.write('DEVICE_MIGRATION_OK\n');
 } finally {
   await closePool();
