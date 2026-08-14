@@ -22,8 +22,8 @@ if (handle && !/^[a-z0-9][a-z0-9_-]{2,23}$/.test(handle)) {
 if (!Number.isInteger(days) || days < 1 || days > 30) {
   throw new Error('--days debe estar entre 1 y 30');
 }
-if (!['member', 'admin'].includes(role)) {
-  throw new Error('--role debe ser member o admin');
+if (!['member', 'helper', 'developer', 'admin'].includes(role)) {
+  throw new Error('--role debe ser member, helper, developer o admin');
 }
 
 const config = securityConfig();

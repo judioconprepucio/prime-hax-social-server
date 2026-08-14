@@ -17,7 +17,7 @@ CREATE TABLE users (
   presence varchar(16) NOT NULL DEFAULT 'offline'
     CHECK (presence IN ('offline', 'online', 'away', 'busy', 'playing')),
   role varchar(16) NOT NULL DEFAULT 'member'
-    CHECK (role IN ('member', 'admin')),
+    CHECK (role IN ('member', 'helper', 'developer', 'admin')),
   is_disabled boolean NOT NULL DEFAULT false,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
@@ -59,7 +59,7 @@ CREATE TABLE invitation_codes (
   intended_handle citext,
   label varchar(120),
   granted_role varchar(16) NOT NULL DEFAULT 'member'
-    CHECK (granted_role IN ('member', 'admin')),
+    CHECK (granted_role IN ('member', 'helper', 'developer', 'admin')),
   created_by uuid REFERENCES users(id) ON DELETE SET NULL,
   expires_at timestamptz NOT NULL,
   redeemed_by uuid UNIQUE REFERENCES users(id) ON DELETE SET NULL,
