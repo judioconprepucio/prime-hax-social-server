@@ -146,6 +146,7 @@ export async function chatRoutes(app) {
         type: 'object', additionalProperties: false,
         properties: {
           before: { type: 'string', format: 'date-time' },
+          after: { type: 'string', format: 'date-time' },
           limit: { type: 'integer', minimum: 1, maximum: 100, default: 50 }
         }
       }
@@ -158,15 +159,21 @@ export async function chatRoutes(app) {
     const result = await getPool().query(
       `SELECT id, conversation_id, sender_id, body, created_at, edited_at, deleted_at
        FROM messages
-       WHERE conversation_id = $1 AND ($2::timestamptz IS NULL OR created_at < $2)
+       WHERE conversation_id = $1
+         AND ($2::timestamptz IS NULL OR created_at < $2)
+         AND ($4::timestamptz IS NULL OR created_at > $4)
        ORDER BY created_at DESC, id DESC LIMIT $3`,
-      [conversationId, request.query.before || null, request.query.limit || 50]
+      [conversationId, request.query.before || null, request.query.limit || 50, request.query.after || null]
     );
-    await getPool().query(
-      `UPDATE conversation_members SET last_read_at = now()
-       WHERE conversation_id = $1 AND user_id = $2`,
-      [conversationId, request.auth.userId]
-    );
+    if (result.rowCount) {
+      const newestMessageAt = result.rows[0].created_at;
+      await getPool().query(
+        `UPDATE conversation_members SET last_read_at = $3
+         WHERE conversation_id = $1 AND user_id = $2
+           AND (last_read_at IS NULL OR last_read_at < $3)`,
+        [conversationId, request.auth.userId, newestMessageAt]
+      );
+    }
     return { messages: result.rows.reverse().map(publicMessage) };
   });
 
