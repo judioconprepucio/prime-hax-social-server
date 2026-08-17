@@ -29,6 +29,91 @@ async function catalogManager(userId) {
   return canManageMusicCatalog(await userRole(userId));
 }
 
+async function musicSessionAccess(client, sessionId, userId) {
+  const result = await client.query(
+    `SELECT s.*,
+            u.role,
+            EXISTS (
+              SELECT 1 FROM music_djs d
+              WHERE d.session_id = s.id AND d.user_id = $2 AND d.revoked_at IS NULL
+            ) AS is_dj
+     FROM music_sessions s
+     JOIN users u ON u.id = $2 AND u.is_disabled = false
+     WHERE s.id = $1 AND s.ended_at IS NULL`,
+    [sessionId, userId]
+  );
+  const session = result.rows[0];
+  if (!session) return null;
+  return {
+    session,
+    elevated: ['admin', 'developer'].includes(session.role),
+    canControl: session.owner_id === userId || session.is_dj || ['admin', 'developer'].includes(session.role),
+    canManageDjs: session.owner_id === userId || ['admin', 'developer'].includes(session.role)
+  };
+}
+
+async function publicMusicSession(roomFingerprint, userId) {
+  const result = await getPool().query(
+    `SELECT s.*, t.title, t.artist, t.album, t.duration_ms, t.mime_type,
+            owner.handle_display AS owner_handle_display,
+            viewer.role AS viewer_role,
+            EXISTS (
+              SELECT 1 FROM music_djs d
+              WHERE d.session_id = s.id AND d.user_id = $2 AND d.revoked_at IS NULL
+            ) AS viewer_is_dj
+     FROM music_sessions s
+     JOIN users owner ON owner.id = s.owner_id
+     JOIN users viewer ON viewer.id = $2 AND viewer.is_disabled = false
+     LEFT JOIN music_tracks t ON t.id = s.current_track_id AND t.status = 'ready'
+     WHERE s.room_fingerprint = $1 AND s.ended_at IS NULL`,
+    [roomFingerprint, userId]
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  const elapsed = row.playback_state === 'playing' && row.track_started_at
+    ? Math.max(0, Date.now() - new Date(row.track_started_at).getTime())
+    : 0;
+  const queue = await getPool().query(
+    `SELECT q.id, q.position, q.status, t.id AS track_id, t.title, t.artist, t.duration_ms
+     FROM music_queue q
+     JOIN music_tracks t ON t.id = q.track_id
+     WHERE q.session_id = $1 AND q.status IN ('queued', 'playing')
+     ORDER BY q.position LIMIT 100`,
+    [row.id]
+  );
+  const djs = await getPool().query(
+    `SELECT u.id, u.handle_display, u.display_name
+     FROM music_djs d JOIN users u ON u.id = d.user_id
+     WHERE d.session_id = $1 AND d.revoked_at IS NULL
+     ORDER BY lower(u.handle_display)`,
+    [row.id]
+  );
+  return {
+    id: row.id,
+    roomFingerprint: row.room_fingerprint,
+    roomName: row.room_name,
+    ownerHandle: `@${row.owner_handle_display}`,
+    playbackState: row.playback_state,
+    positionMs: Number(row.paused_position_ms) + elapsed,
+    shuffleEnabled: row.shuffle_enabled,
+    repeatMode: row.repeat_mode,
+    autoDjEnabled: row.auto_dj_enabled,
+    masterVolume: row.master_volume,
+    stateVersion: Number(row.state_version),
+    currentTrack: row.current_track_id ? {
+      id: row.current_track_id, title: row.title, artist: row.artist, album: row.album,
+      durationMs: row.duration_ms, mimeType: row.mime_type
+    } : null,
+    canControl: row.owner_id === userId || row.viewer_is_dj || ['admin', 'developer'].includes(row.viewer_role),
+    canManageDjs: row.owner_id === userId || ['admin', 'developer'].includes(row.viewer_role),
+    djs: djs.rows.map((dj) => ({ id: dj.id, handle: `@${dj.handle_display}`, displayName: dj.display_name })),
+    queue: queue.rows.map((item) => ({
+      id: item.id, position: Number(item.position), status: item.status,
+      track: { id: item.track_id, title: item.title, artist: item.artist, durationMs: item.duration_ms }
+    }))
+  };
+}
+
 async function playlistAccess(playlistId, userId) {
   const result = await getPool().query(
     `SELECT p.*, u.handle_display AS owner_handle_display
@@ -51,8 +136,262 @@ function storageFailure(app, operation, error) {
   app.log.error({ err: error, operation }, 'Supabase Storage operation failed');
 }
 
+async function recordMusicEvent(client, sessionId, actorId, eventType, payload = {}) {
+  const version = await client.query(
+    'UPDATE music_sessions SET state_version = state_version + 1, last_heartbeat_at = now() WHERE id = $1 RETURNING state_version',
+    [sessionId]
+  );
+  const stateVersion = Number(version.rows[0].state_version);
+  await client.query(
+    'INSERT INTO music_events (session_id, actor_id, event_type, state_version, payload) VALUES ($1, $2, $3, $4, $5)',
+    [sessionId, actorId, eventType, stateVersion, JSON.stringify(payload)]
+  );
+  return stateVersion;
+}
+
+function currentPositionMs(session) {
+  if (session.playback_state !== 'playing' || !session.track_started_at) return Number(session.paused_position_ms || 0);
+  return Math.max(0, Number(session.paused_position_ms || 0) + Date.now() - new Date(session.track_started_at).getTime());
+}
+
+async function selectQueueTrack(client, sessionId, direction = 'next') {
+  if (direction === 'previous') {
+    const previous = await client.query(
+      `SELECT q.*, t.duration_ms FROM music_queue q JOIN music_tracks t ON t.id = q.track_id
+       WHERE q.session_id = $1 AND q.status IN ('played', 'skipped')
+       ORDER BY q.finished_at DESC NULLS LAST, q.position DESC LIMIT 1`,
+      [sessionId]
+    );
+    return previous.rows[0] || null;
+  }
+  const next = await client.query(
+    `SELECT q.*, t.duration_ms FROM music_queue q JOIN music_tracks t ON t.id = q.track_id
+     WHERE q.session_id = $1 AND q.status = 'queued' ORDER BY q.position LIMIT 1`,
+    [sessionId]
+  );
+  return next.rows[0] || null;
+}
+
 export async function musicRoutes(app) {
   app.addHook('preHandler', requireAuth);
+
+  app.post('/sessions/connect', {
+    schema: {
+      body: {
+        type: 'object', additionalProperties: false, required: ['roomFingerprint'],
+        properties: {
+          roomFingerprint: { type: 'string', pattern: '^[0-9a-f]{64}$' },
+          roomName: { type: 'string', maxLength: 160 }
+        }
+      }
+    }
+  }, async (request) => {
+    await getPool().query(
+      `INSERT INTO music_sessions (room_fingerprint, room_name, owner_id)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (room_fingerprint) WHERE ended_at IS NULL
+       DO UPDATE SET room_name = COALESCE(EXCLUDED.room_name, music_sessions.room_name), last_heartbeat_at = now()`,
+      [request.body.roomFingerprint, request.body.roomName?.trim() || null, request.auth.userId]
+    );
+    return { session: await publicMusicSession(request.body.roomFingerprint, request.auth.userId) };
+  });
+
+  app.get('/sessions/room/:roomFingerprint', {
+    schema: {
+      params: {
+        type: 'object', additionalProperties: false, required: ['roomFingerprint'],
+        properties: { roomFingerprint: { type: 'string', pattern: '^[0-9a-f]{64}$' } }
+      }
+    }
+  }, async (request, reply) => {
+    const session = await publicMusicSession(request.params.roomFingerprint, request.auth.userId);
+    if (!session) return reply.code(404).send({ error: 'music_session_not_found' });
+    return { session };
+  });
+
+  app.post('/sessions/:sessionId/control', {
+    schema: {
+      params: uuidParams('sessionId'),
+      body: {
+        type: 'object', additionalProperties: false, required: ['action'],
+        properties: {
+          action: { type: 'string', enum: ['play', 'pause', 'resume', 'stop', 'next', 'previous', 'shuffle', 'repeat', 'autodj'] },
+          trackId: { type: 'string', format: 'uuid' },
+          enabled: { type: 'boolean' },
+          repeatMode: { type: 'string', enum: ['off', 'track', 'playlist'] }
+        }
+      }
+    }
+  }, async (request, reply) => {
+    let roomFingerprint;
+    const result = await withTransaction(async (client) => {
+      const access = await musicSessionAccess(client, request.params.sessionId, request.auth.userId);
+      if (!access) return { status: 404, error: 'music_session_not_found' };
+      if (!access.canControl) return { status: 403, error: 'music_dj_permission_required' };
+      await client.query('SELECT id FROM music_sessions WHERE id = $1 FOR UPDATE', [request.params.sessionId]);
+      const session = (await client.query('SELECT * FROM music_sessions WHERE id = $1', [request.params.sessionId])).rows[0];
+      roomFingerprint = session.room_fingerprint;
+      const action = request.body.action;
+      if (action === 'play') {
+        if (!request.body.trackId) return { status: 400, error: 'music_track_required' };
+        const track = await client.query("SELECT id FROM music_tracks WHERE id = $1 AND status = 'ready'", [request.body.trackId]);
+        if (!track.rowCount) return { status: 404, error: 'music_track_not_found' };
+        await client.query(
+          `UPDATE music_sessions SET current_track_id = $2, playback_state = 'playing',
+           track_started_at = now(), paused_position_ms = 0 WHERE id = $1`,
+          [session.id, request.body.trackId]
+        );
+      } else if (action === 'pause') {
+        if (session.playback_state === 'playing') {
+          await client.query(
+            "UPDATE music_sessions SET playback_state = 'paused', paused_position_ms = $2, track_started_at = NULL WHERE id = $1",
+            [session.id, Math.floor(currentPositionMs(session))]
+          );
+        }
+      } else if (action === 'resume') {
+        if (session.current_track_id && session.playback_state !== 'playing') {
+          await client.query("UPDATE music_sessions SET playback_state = 'playing', track_started_at = now() WHERE id = $1", [session.id]);
+        }
+      } else if (action === 'stop') {
+        await client.query("UPDATE music_sessions SET playback_state = 'stopped', current_track_id = NULL, track_started_at = NULL, paused_position_ms = 0 WHERE id = $1", [session.id]);
+      } else if (action === 'shuffle') {
+        const enabled = request.body.enabled ?? !session.shuffle_enabled;
+        await client.query('UPDATE music_sessions SET shuffle_enabled = $2 WHERE id = $1', [session.id, enabled]);
+      } else if (action === 'repeat') {
+        const mode = request.body.repeatMode || (session.repeat_mode === 'off' ? 'track' : session.repeat_mode === 'track' ? 'playlist' : 'off');
+        await client.query('UPDATE music_sessions SET repeat_mode = $2 WHERE id = $1', [session.id, mode]);
+      } else if (action === 'autodj') {
+        const enabled = request.body.enabled ?? !session.auto_dj_enabled;
+        await client.query('UPDATE music_sessions SET auto_dj_enabled = $2 WHERE id = $1', [session.id, enabled]);
+      } else {
+        await client.query(
+          "UPDATE music_queue SET status = CASE WHEN status = 'playing' THEN $2 ELSE status END, finished_at = CASE WHEN status = 'playing' THEN now() ELSE finished_at END WHERE session_id = $1",
+          [session.id, action === 'next' ? 'skipped' : 'played']
+        );
+        const selected = await selectQueueTrack(client, session.id, action);
+        if (selected) {
+          await client.query("UPDATE music_queue SET status = 'playing', started_at = now(), finished_at = NULL WHERE id = $1", [selected.id]);
+          await client.query("UPDATE music_sessions SET current_track_id = $2, playback_state = 'playing', track_started_at = now(), paused_position_ms = 0 WHERE id = $1", [session.id, selected.track_id]);
+        } else {
+          await client.query("UPDATE music_sessions SET current_track_id = NULL, playback_state = 'stopped', track_started_at = NULL, paused_position_ms = 0 WHERE id = $1", [session.id]);
+        }
+      }
+      await recordMusicEvent(client, session.id, request.auth.userId, `control_${action}`, request.body);
+      return { status: 200 };
+    });
+    if (result.error) return reply.code(result.status).send({ error: result.error });
+    return { session: await publicMusicSession(roomFingerprint, request.auth.userId) };
+  });
+
+  app.post('/sessions/:sessionId/queue', {
+    schema: {
+      params: uuidParams('sessionId'),
+      body: {
+        type: 'object', additionalProperties: false, required: ['trackId'],
+        properties: { trackId: { type: 'string', format: 'uuid' } }
+      }
+    }
+  }, async (request, reply) => {
+    let roomFingerprint;
+    const result = await withTransaction(async (client) => {
+      const access = await musicSessionAccess(client, request.params.sessionId, request.auth.userId);
+      if (!access) return { status: 404, error: 'music_session_not_found' };
+      if (!access.canControl) return { status: 403, error: 'music_dj_permission_required' };
+      roomFingerprint = access.session.room_fingerprint;
+      const track = await client.query("SELECT id FROM music_tracks WHERE id = $1 AND status = 'ready'", [request.body.trackId]);
+      if (!track.rowCount) return { status: 404, error: 'music_track_not_found' };
+      await client.query('SELECT id FROM music_sessions WHERE id = $1 FOR UPDATE', [request.params.sessionId]);
+      const position = (await client.query('SELECT COALESCE(max(position), -1) + 1 AS next FROM music_queue WHERE session_id = $1', [request.params.sessionId])).rows[0].next;
+      await client.query('INSERT INTO music_queue (session_id, track_id, added_by, position) VALUES ($1, $2, $3, $4)', [request.params.sessionId, request.body.trackId, request.auth.userId, position]);
+      await recordMusicEvent(client, request.params.sessionId, request.auth.userId, 'queue_add', { trackId: request.body.trackId });
+      return { status: 201 };
+    });
+    if (result.error) return reply.code(result.status).send({ error: result.error });
+    return reply.code(201).send({ session: await publicMusicSession(roomFingerprint, request.auth.userId) });
+  });
+
+  app.post('/sessions/:sessionId/queue/playlist', {
+    schema: {
+      params: uuidParams('sessionId'),
+      body: {
+        type: 'object', additionalProperties: false, required: ['playlistId'],
+        properties: { playlistId: { type: 'string', format: 'uuid' } }
+      }
+    }
+  }, async (request, reply) => {
+    let roomFingerprint;
+    const result = await withTransaction(async (client) => {
+      const access = await musicSessionAccess(client, request.params.sessionId, request.auth.userId);
+      if (!access) return { status: 404, error: 'music_session_not_found' };
+      if (!access.canControl) return { status: 403, error: 'music_dj_permission_required' };
+      roomFingerprint = access.session.room_fingerprint;
+      const playlist = await playlistAccess(request.body.playlistId, request.auth.userId);
+      if (!playlist?.canRead) return { status: 404, error: 'music_playlist_not_found' };
+      await client.query('SELECT id FROM music_sessions WHERE id = $1 FOR UPDATE', [request.params.sessionId]);
+      const tracks = await client.query(
+        `SELECT pt.track_id FROM music_playlist_tracks pt JOIN music_tracks t ON t.id = pt.track_id AND t.status = 'ready'
+         WHERE pt.playlist_id = $1 ORDER BY pt.position`, [request.body.playlistId]
+      );
+      let position = Number((await client.query('SELECT COALESCE(max(position), -1) + 1 AS next FROM music_queue WHERE session_id = $1', [request.params.sessionId])).rows[0].next);
+      for (const row of tracks.rows) {
+        await client.query('INSERT INTO music_queue (session_id, track_id, added_by, position) VALUES ($1, $2, $3, $4)', [request.params.sessionId, row.track_id, request.auth.userId, position++]);
+      }
+      await recordMusicEvent(client, request.params.sessionId, request.auth.userId, 'queue_playlist', { playlistId: request.body.playlistId, count: tracks.rowCount });
+      return { status: 201 };
+    });
+    if (result.error) return reply.code(result.status).send({ error: result.error });
+    return reply.code(201).send({ session: await publicMusicSession(roomFingerprint, request.auth.userId) });
+  });
+
+  app.post('/sessions/:sessionId/djs', {
+    schema: {
+      params: uuidParams('sessionId'),
+      body: {
+        type: 'object', additionalProperties: false, required: ['handle'],
+        properties: { handle: { type: 'string', minLength: 3, maxLength: 25 } }
+      }
+    }
+  }, async (request, reply) => {
+    let roomFingerprint;
+    const result = await withTransaction(async (client) => {
+      const access = await musicSessionAccess(client, request.params.sessionId, request.auth.userId);
+      if (!access) return { status: 404, error: 'music_session_not_found' };
+      if (!access.canManageDjs) return { status: 403, error: 'music_dj_management_required' };
+      roomFingerprint = access.session.room_fingerprint;
+      const handle = request.body.handle.trim().replace(/^@/, '').toLowerCase();
+      const user = await client.query('SELECT id FROM users WHERE handle = $1 AND is_disabled = false', [handle]);
+      if (!user.rowCount) return { status: 404, error: 'user_not_found' };
+      await client.query(
+        `INSERT INTO music_djs (session_id, user_id, granted_by) VALUES ($1, $2, $3)
+         ON CONFLICT (session_id, user_id) DO UPDATE SET granted_by = EXCLUDED.granted_by, granted_at = now(), revoked_at = NULL`,
+        [request.params.sessionId, user.rows[0].id, request.auth.userId]
+      );
+      await recordMusicEvent(client, request.params.sessionId, request.auth.userId, 'dj_add', { userId: user.rows[0].id });
+      return { status: 201 };
+    });
+    if (result.error) return reply.code(result.status).send({ error: result.error });
+    return reply.code(201).send({ session: await publicMusicSession(roomFingerprint, request.auth.userId) });
+  });
+
+  app.delete('/sessions/:sessionId/djs/:userId', {
+    schema: { params: {
+      type: 'object', additionalProperties: false, required: ['sessionId', 'userId'],
+      properties: { sessionId: { type: 'string', format: 'uuid' }, userId: { type: 'string', format: 'uuid' } }
+    } }
+  }, async (request, reply) => {
+    let roomFingerprint;
+    const result = await withTransaction(async (client) => {
+      const access = await musicSessionAccess(client, request.params.sessionId, request.auth.userId);
+      if (!access) return { status: 404, error: 'music_session_not_found' };
+      if (!access.canManageDjs) return { status: 403, error: 'music_dj_management_required' };
+      roomFingerprint = access.session.room_fingerprint;
+      await client.query('UPDATE music_djs SET revoked_at = now() WHERE session_id = $1 AND user_id = $2 AND revoked_at IS NULL', [request.params.sessionId, request.params.userId]);
+      await recordMusicEvent(client, request.params.sessionId, request.auth.userId, 'dj_remove', { userId: request.params.userId });
+      return { status: 200 };
+    });
+    if (result.error) return reply.code(result.status).send({ error: result.error });
+    return { session: await publicMusicSession(roomFingerprint, request.auth.userId) };
+  });
 
   app.get('/tracks', async () => {
     const result = await getPool().query(
