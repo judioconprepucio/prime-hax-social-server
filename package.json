@@ -10,10 +10,11 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "check": "node --check src/server.js && node --check src/routes/auth.js && node --check src/routes/social.js && node --check src/routes/chat.js && node --check src/routes/music.js && node --check src/storage.js && node --check src/music-utils.js && node --check src/auth-middleware.js && node --check src/tools/check-database.js && node --check src/tools/check-chat-database.js && node --check src/tools/create-invite.js",
+    "check": "node --check src/server.js && node --check src/routes/auth.js && node --check src/routes/social.js && node --check src/routes/chat.js && node --check src/routes/music.js && node --check src/storage.js && node --check src/music-utils.js && node --check src/auth-middleware.js && node --check src/tools/check-database.js && node --check src/tools/check-chat-database.js && node --check src/tools/create-invite.js && node --check src/tools/reset-password.js",
     "db:check": "node src/tools/check-database.js",
     "db:check-chat": "node src/tools/check-chat-database.js",
     "db:migrate": "node src/tools/apply-migration.js",
+    "password:reset": "node src/tools/reset-password.js",
     "test": "node --test",
     "invite:create": "node src/tools/create-invite.js"
   },
