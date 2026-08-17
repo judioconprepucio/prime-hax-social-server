@@ -11,7 +11,14 @@ const expectedTables = [
   'conversations',
   'conversation_members',
   'messages',
-  'room_invites'
+  'room_invites',
+  'music_tracks',
+  'music_playlists',
+  'music_playlist_tracks',
+  'music_sessions',
+  'music_queue',
+  'music_djs',
+  'music_events'
 ];
 
 const query = `
@@ -32,7 +39,14 @@ const query = `
           'conversation_members',
           'messages',
           'room_invites',
-          'refresh_sessions'
+          'refresh_sessions',
+          'music_tracks',
+          'music_playlists',
+          'music_playlist_tracks',
+          'music_sessions',
+          'music_queue',
+          'music_djs',
+          'music_events'
         )
     ) AS core_tables,
     ARRAY(
@@ -57,11 +71,11 @@ try {
   const status = result.rows[0];
   const missingTables = [...expectedTables, 'refresh_sessions']
     .filter((table) => !status.available_tables.includes(table));
-  if (status.core_tables !== 12 || missingTables.length || !status.device_migration) {
+  if (status.core_tables !== 19 || missingTables.length || !status.device_migration) {
     throw new Error(`La base no contiene toda la estructura esperada. Faltan: ${missingTables.join(', ') || 'columnas de migracion'}`);
   }
   process.stdout.write(`DATABASE_OK (${status.database_name})\n`);
-  process.stdout.write(`CORE_TABLES_OK (${status.core_tables}/12)\n`);
+  process.stdout.write(`CORE_TABLES_OK (${status.core_tables}/19)\n`);
   process.stdout.write('DEVICE_MIGRATION_OK\n');
 } finally {
   await closePool();
