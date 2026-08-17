@@ -1,7 +1,7 @@
 import path from 'node:path';
 
 const catalogRoles = new Set(['developer', 'admin']);
-const allowedExtensions = new Set(['.mp3', '.ogg', '.opus', '.wav', '.flac', '.m4a', '.aac', '.webm']);
+const allowedExtensions = new Set(['.mp3', '.ogg', '.opus', '.wav', '.flac', '.m4a', '.mp4', '.aac', '.webm']);
 
 export function canManageMusicCatalog(role) {
   return catalogRoles.has(role);
