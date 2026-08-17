@@ -437,6 +437,7 @@ export async function musicRoutes(app) {
     const trackId = crypto.randomUUID();
     const storagePath = `tracks/${trackId}/${filename}`;
     let inserted;
+    let retryingUpload = false;
     try {
       const result = await getPool().query(
         `INSERT INTO music_tracks
@@ -454,13 +455,23 @@ export async function musicRoutes(app) {
       );
       inserted = result.rows[0];
     } catch (error) {
-      if (error.code === '23505') return reply.code(409).send({ error: 'music_track_already_exists' });
-      throw error;
+      if (error.code === '23505' && request.body.contentSha256) {
+        const existing = await getPool().query(
+          `SELECT * FROM music_tracks
+            WHERE content_sha256 = $1 AND created_by = $2 AND status = 'uploading'
+            ORDER BY created_at DESC LIMIT 1`,
+          [request.body.contentSha256.toLowerCase(), request.auth.userId]
+        );
+        inserted = existing.rows[0];
+        retryingUpload = Boolean(inserted);
+      }
+      if (!inserted && error.code === '23505') return reply.code(409).send({ error: 'music_track_already_exists' });
+      if (!inserted) throw error;
     }
 
-    const { data, error } = await getMusicBucket().createSignedUploadUrl(storagePath, { upsert: false });
+    const { data, error } = await getMusicBucket().createSignedUploadUrl(inserted.storage_path, { upsert: retryingUpload });
     if (error || !data?.token) {
-      await getPool().query("UPDATE music_tracks SET status = 'failed', content_sha256 = NULL WHERE id = $1", [trackId]);
+      await getPool().query("UPDATE music_tracks SET status = 'failed', content_sha256 = NULL WHERE id = $1", [inserted.id]);
       storageFailure(app, 'createSignedUploadUrl', error);
       return reply.code(502).send({ error: 'music_storage_unavailable' });
     }
@@ -469,7 +480,7 @@ export async function musicRoutes(app) {
       track: publicTrack(inserted),
       upload: {
         bucket: getStorageConfig().musicBucket,
-        path: storagePath,
+        path: inserted.storage_path,
         token: data.token,
         signedUrl: data.signedUrl,
         expiresIn: getStorageConfig().uploadExpiresIn
