@@ -5,6 +5,7 @@ import { getPool } from './db.js';
 import { authRoutes } from './routes/auth.js';
 import { chatRoutes } from './routes/chat.js';
 import { socialRoutes } from './routes/social.js';
+import { musicRoutes } from './routes/music.js';
 
 export async function buildApp(options = {}) {
   const app = Fastify({
@@ -29,6 +30,7 @@ export async function buildApp(options = {}) {
   await app.register(authRoutes, { prefix: '/v1/auth' });
   await app.register(socialRoutes, { prefix: '/v1/social' });
   await app.register(chatRoutes, { prefix: '/v1/social' });
+  await app.register(musicRoutes, { prefix: '/v1/music' });
 
   app.setErrorHandler((error, request, reply) => {
     if (error.validation) return reply.code(400).send({ error: 'invalid_request' });

@@ -29,3 +29,9 @@ services:
         sync: false
       - key: RECOVERY_CODE_PEPPER
         sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: SUPABASE_MUSIC_BUCKET
+        value: prime-hax-music

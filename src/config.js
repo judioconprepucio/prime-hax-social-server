@@ -66,3 +66,24 @@ export function serverConfig() {
     production: process.env.NODE_ENV === 'production'
   };
 }
+
+export function storageConfig() {
+  const url = process.env.SUPABASE_URL;
+  if (!url || !/^https:\/\/[a-z0-9-]+\.supabase\.co\/?$/i.test(url)) {
+    throw new Error('SUPABASE_URL no está configurada correctamente');
+  }
+
+  const secretKey = requiredSecret('SUPABASE_SECRET_KEY');
+  const musicBucket = process.env.SUPABASE_MUSIC_BUCKET || 'prime-hax-music';
+  if (!/^[a-z0-9][a-z0-9._-]{2,62}$/i.test(musicBucket)) {
+    throw new Error('SUPABASE_MUSIC_BUCKET no es válido');
+  }
+
+  return {
+    url: url.replace(/\/$/, ''),
+    secretKey,
+    musicBucket,
+    uploadExpiresIn: 2 * 60 * 60,
+    playbackExpiresIn: 60 * 60
+  };
+}

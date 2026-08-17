@@ -78,6 +78,8 @@ en logs, capturas o mensajes.
 3. Elegir el plan gratuito.
 4. Configurar `npm ci` como Build Command y `npm start` como Start Command.
 5. Cargar las variables anteriores en **Environment**.
+   Para el módulo musical agregar también `SUPABASE_URL`,
+   `SUPABASE_SECRET_KEY` y `SUPABASE_MUSIC_BUCKET=prime-hax-music`.
 6. Desplegar y probar `GET /health`.
 7. Guardar la URL HTTPS entregada por Render.
 
@@ -169,4 +171,3 @@ amplía gradualmente a cinco y finalmente al grupo completo.
 
 Como el esquema utiliza PostgreSQL estándar, una migración futura consiste en
 crear otra base, importar el dump, cambiar `DATABASE_URL` y volver a desplegar.
-

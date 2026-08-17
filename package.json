@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "check": "node --check src/server.js && node --check src/routes/auth.js && node --check src/routes/social.js && node --check src/routes/chat.js && node --check src/auth-middleware.js && node --check src/tools/check-database.js && node --check src/tools/check-chat-database.js && node --check src/tools/create-invite.js",
+    "check": "node --check src/server.js && node --check src/routes/auth.js && node --check src/routes/social.js && node --check src/routes/chat.js && node --check src/routes/music.js && node --check src/storage.js && node --check src/music-utils.js && node --check src/auth-middleware.js && node --check src/tools/check-database.js && node --check src/tools/check-chat-database.js && node --check src/tools/create-invite.js",
     "db:check": "node src/tools/check-database.js",
     "db:check-chat": "node src/tools/check-chat-database.js",
     "db:migrate": "node src/tools/apply-migration.js",
@@ -20,6 +20,7 @@
   "dependencies": {
     "@fastify/helmet": "^13.0.2",
     "@fastify/rate-limit": "^10.3.0",
+    "@supabase/supabase-js": "^2.112.3",
     "argon2": "^0.44.0",
     "dotenv": "^17.2.3",
     "fastify": "^5.6.2",
