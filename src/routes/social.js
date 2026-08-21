@@ -110,7 +110,7 @@ export async function socialRoutes(app) {
         }
       }
     },
-    config: { rateLimit: { max: 12, timeWindow: '15 minutes' } }
+    config: { rateLimit: { max: 30, timeWindow: '15 minutes' } }
   }, async (request, reply) => {
     const content = Buffer.from(request.body.dataBase64, 'base64');
     const maximum = request.body.kind === 'avatar' ? 4 * 1024 * 1024 : 10 * 1024 * 1024;
@@ -125,6 +125,10 @@ export async function socialRoutes(app) {
            byte_size = EXCLUDED.byte_size, updated_at = now()`,
       [request.auth.userId, request.body.kind, request.body.mimeType, content, content.length]
     );
+    if (request.query?.compact === '1') {
+      return { kind: request.body.kind, mimeType: request.body.mimeType, byteSize: content.length };
+    }
+    // Backwards compatibility for clients already distributed to friends.
     return { kind: request.body.kind, mimeType: request.body.mimeType, dataBase64: content.toString('base64') };
   });
 
