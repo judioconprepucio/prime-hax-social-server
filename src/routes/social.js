@@ -99,21 +99,21 @@ export async function socialRoutes(app) {
   });
 
   app.put('/me/media', {
-    bodyLimit: 7 * 1024 * 1024,
+    bodyLimit: 15 * 1024 * 1024,
     schema: {
       body: {
         type: 'object', additionalProperties: false, required: ['kind', 'mimeType', 'dataBase64'],
         properties: {
           kind: { type: 'string', enum: ['avatar', 'banner'] },
-          mimeType: { type: 'string', enum: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] },
-          dataBase64: { type: 'string', minLength: 4, maxLength: 7_000_000 }
+          mimeType: { type: 'string', enum: ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'video/mp4', 'video/webm'] },
+          dataBase64: { type: 'string', minLength: 4, maxLength: 14_000_000 }
         }
       }
     },
     config: { rateLimit: { max: 12, timeWindow: '15 minutes' } }
   }, async (request, reply) => {
     const content = Buffer.from(request.body.dataBase64, 'base64');
-    const maximum = request.body.kind === 'avatar' ? 2 * 1024 * 1024 : 5 * 1024 * 1024;
+    const maximum = request.body.kind === 'avatar' ? 4 * 1024 * 1024 : 10 * 1024 * 1024;
     if (!content.length || content.length > maximum) {
       return reply.code(400).send({ error: 'media_too_large' });
     }
